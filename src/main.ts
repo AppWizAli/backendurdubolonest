@@ -66,4 +66,10 @@ async function bootstrap(): Promise<void> {
   await app.listen(port, '0.0.0.0');
 }
 
-void bootstrap();
+void bootstrap().catch((error: unknown) => {
+  const details = error instanceof Error
+    ? { name: error.name, message: error.message, stack: error.stack }
+    : { error };
+  process.stderr.write(`${JSON.stringify({ level: 'fatal', event: 'bootstrap_failed', ...details })}\n`);
+  process.exit(1);
+});
