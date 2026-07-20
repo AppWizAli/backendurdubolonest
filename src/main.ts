@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { Reflector } from '@nestjs/core';
 import { ValidationPipe, VersioningType, ClassSerializerInterceptor } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { writeSync } from 'node:fs';
 import helmet from 'helmet';
 import compression from 'compression';
 import cookieParser from 'cookie-parser';
@@ -11,7 +12,43 @@ import { AppModule } from './app.module';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 import { StructuredLoggerService } from './common/logging/structured-logger.service';
 
+const requiredBootEnvKeys = [
+  'DATABASE_URL',
+  'REDIS_URL',
+  'PUBLIC_API_ORIGIN',
+  'ADMIN_WEB_ORIGIN',
+  'JWT_ISSUER',
+  'JWT_AUDIENCE',
+  'JWT_PRIVATE_KEY_B64',
+  'JWT_PUBLIC_KEY_B64',
+  'METRICS_TOKEN',
+  'ARGON2_DUMMY_HASH',
+  'MEDIA_GATEWAY_PUBLIC_URL',
+  'MEDIA_LOCATOR_ENCRYPTION_KEY_B64',
+  'MEDIA_PROVIDER_ALLOWED_HOSTS',
+  'MEDIA_PROVIDER_ORIGIN_SECRET',
+] as const;
+
+function serializeFailure(error: unknown): Record<string, unknown> {
+  return error instanceof Error
+    ? { name: error.name, message: error.message, stack: error.stack }
+    : { error };
+}
+
+function fatal(event: string, payload: Record<string, unknown> = {}): never {
+  writeSync(2, `${JSON.stringify({ level: 'fatal', event, ...payload })}\n`);
+  process.exit(1);
+}
+
+function preflightEnvironment(): void {
+  const missing = requiredBootEnvKeys.filter((key) => !process.env[key]?.trim());
+  if (missing.length > 0) {
+    fatal('missing_boot_env', { missing });
+  }
+}
+
 async function bootstrap(): Promise<void> {
+  preflightEnvironment();
   const app = await NestFactory.create(AppModule, {
     bodyParser: false,
     logger: false,
@@ -66,10 +103,9 @@ async function bootstrap(): Promise<void> {
   await app.listen(port, '0.0.0.0');
 }
 
+process.on('uncaughtException', (error: unknown) => fatal('uncaught_exception', serializeFailure(error)));
+process.on('unhandledRejection', (reason: unknown) => fatal('unhandled_rejection', serializeFailure(reason)));
+
 void bootstrap().catch((error: unknown) => {
-  const details = error instanceof Error
-    ? { name: error.name, message: error.message, stack: error.stack }
-    : { error };
-  process.stderr.write(`${JSON.stringify({ level: 'fatal', event: 'bootstrap_failed', ...details })}\n`);
-  process.exit(1);
+  fatal('bootstrap_failed', serializeFailure(error));
 });
