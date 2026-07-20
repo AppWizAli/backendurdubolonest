@@ -49,6 +49,23 @@ function preflightEnvironment(): void {
   }
 }
 
+function preflightSecrets(): void {
+  const invalid: string[] = [];
+
+  const privateKey = Buffer.from(process.env.JWT_PRIVATE_KEY_B64 ?? '', 'base64').toString('utf8');
+  if (!privateKey.includes('BEGIN PRIVATE KEY')) invalid.push('JWT_PRIVATE_KEY_B64');
+
+  const publicKey = Buffer.from(process.env.JWT_PUBLIC_KEY_B64 ?? '', 'base64').toString('utf8');
+  if (!publicKey.includes('BEGIN PUBLIC KEY')) invalid.push('JWT_PUBLIC_KEY_B64');
+
+  const locatorKey = Buffer.from(process.env.MEDIA_LOCATOR_ENCRYPTION_KEY_B64 ?? '', 'base64');
+  if (locatorKey.length !== 32) invalid.push('MEDIA_LOCATOR_ENCRYPTION_KEY_B64');
+
+  if (invalid.length > 0) {
+    fatal('invalid_boot_env', { invalid });
+  }
+}
+
 async function bootstrap(): Promise<void> {
   const missing = requiredBootEnvKeys.filter((key) => !process.env[key]?.trim());
   const entryLine = `${JSON.stringify({
@@ -60,6 +77,7 @@ async function bootstrap(): Promise<void> {
   writeSync(1, entryLine);
   writeSync(2, entryLine);
   preflightEnvironment();
+  preflightSecrets();
   const app = await NestFactory.create(AppModule, {
     bodyParser: false,
     logger: false,
