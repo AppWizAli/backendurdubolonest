@@ -36,7 +36,9 @@ function serializeFailure(error: unknown): Record<string, unknown> {
 }
 
 function fatal(event: string, payload: Record<string, unknown> = {}): never {
-  writeSync(2, `${JSON.stringify({ level: 'fatal', event, ...payload })}\n`);
+  const line = `${JSON.stringify({ level: 'fatal', event, ...payload })}\n`;
+  writeSync(1, line);
+  writeSync(2, line);
   process.exit(1);
 }
 
@@ -48,6 +50,15 @@ function preflightEnvironment(): void {
 }
 
 async function bootstrap(): Promise<void> {
+  const missing = requiredBootEnvKeys.filter((key) => !process.env[key]?.trim());
+  const entryLine = `${JSON.stringify({
+    level: 'info',
+    event: 'bootstrap_entry',
+    port: process.env.PORT ?? null,
+    missingBootEnv: missing,
+  })}\n`;
+  writeSync(1, entryLine);
+  writeSync(2, entryLine);
   preflightEnvironment();
   const app = await NestFactory.create(AppModule, {
     bodyParser: false,
