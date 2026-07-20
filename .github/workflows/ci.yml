@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: urdubolo_test
+          POSTGRES_USER: urdubolo
+          POSTGRES_PASSWORD: ci-password
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U urdubolo -d urdubolo_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run prisma:generate
+      - run: npm run prisma:validate
+      - run: npm run prisma:migrate
+        env:
+          DATABASE_URL: postgresql://urdubolo:ci-password@localhost:5432/urdubolo_test?schema=public
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test -- --runInBand
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgresql://urdubolo:ci-password@localhost:5432/urdubolo_test?schema=public
+          REDIS_URL: redis://localhost:6379
+      - run: npm run build

@@ -1,0 +1,865 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DISABLED
+}
+
+enum RoleCode {
+  SUPER_ADMIN
+  ADMIN
+  SUB_ADMIN
+  MODERATOR
+  USER
+}
+
+enum GrantStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELLED
+  EXPIRED
+}
+
+enum PaymentStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
+  REFUNDED
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  EASYPaisa
+  JAZZCASH
+  OTHER
+}
+
+enum AuditOutcome {
+  SUCCESS
+  FAILURE
+  DENIED
+}
+
+enum ContentVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+enum MediaStatus {
+  PROCESSING
+  ACTIVE
+  INACTIVE
+  ERROR
+}
+
+enum MediaType {
+  MP4
+  HLS
+  DASH
+  OTHER
+}
+
+enum EpisodeStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum DeviceStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum PlaybackStatus {
+  ACTIVE
+  CLOSED
+  EXPIRED
+  REVOKED
+}
+
+enum DownloadAccess {
+  GALLERY
+  APP_STORAGE
+  BOTH
+  NEVER
+}
+
+model User {
+  id               String            @id @default(uuid()) @db.Uuid
+  username         String            @db.VarChar(80)
+  email            String            @unique @db.VarChar(320)
+  passwordHash     String            @map("password_hash") @db.VarChar(255)
+  status           UserStatus        @default(ACTIVE)
+  profileImageKey  String?           @map("profile_image_key") @db.VarChar(512)
+  failedLoginCount Int               @default(0) @map("failed_login_count")
+  lockedUntil      DateTime?         @map("locked_until")
+  lastLoginAt      DateTime?         @map("last_login_at")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+  deletedAt        DateTime?         @map("deleted_at")
+  sessions         RefreshSession[]
+  trustedDevices   TrustedDevice[]
+  loginHistory     LoginHistory[]
+  roles            UserRole[]
+  permissions      UserPermission[]
+  subscriptions    Subscription[]
+  payments         PaymentRecord[]
+  groupMembers     GroupMember[]
+  directGrants     EpisodeGrant[]    @relation("DirectUserGrant")
+  auditEvents      AuditEvent[]
+  playbackSessions PlaybackSession[]
+  playbackHistory  PlaybackHistory[]
+  deviceToken      String?           @map("device_token") @db.VarChar(512)
+  createdNotifications Notification[] @relation("NotificationCreator")
+  messages         UserMessage[]     @relation("MessageRecipient")
+  sentMessages     UserMessage[]     @relation("MessageSender")
+  notificationRecipients NotificationRecipient[]
+  securityBlock    SecurityBlock?
+  securityIncidents SecurityIncident[]
+  appReleases      AppRelease[]      @relation("ReleaseUploader")
+  subscriptionRequests SubscriptionRequest[] @relation("SubscriptionRequester")
+  approvedSubscriptionRequests SubscriptionRequest[] @relation("SubscriptionApprover")
+  accountDeletionRequests AccountDeletionRequest[] @relation("AccountDeletionRequester")
+  reviewedAccountDeletionRequests AccountDeletionRequest[] @relation("AccountDeletionReviewer")
+  comments         ContentComment[]
+  videoViews       VideoView[]
+  favoriteDramas   FavoriteDrama[]
+
+  @@index([status, deletedAt])
+  @@index([username])
+  @@map("users")
+}
+
+model RefreshSession {
+  id           String          @id @default(uuid()) @db.Uuid
+  userId       String          @map("user_id") @db.Uuid
+  tokenHash    String          @unique @map("token_hash") @db.Char(64)
+  deviceId     String?         @map("device_id") @db.VarChar(128)
+  deviceName   String?         @map("device_name") @db.VarChar(160)
+  deviceToken  String?         @map("device_token") @db.VarChar(512)
+  ipAddress    String          @map("ip_address") @db.Inet
+  userAgent    String          @map("user_agent") @db.VarChar(512)
+  lastSeenAt   DateTime        @default(now()) @map("last_seen_at")
+  expiresAt    DateTime        @map("expires_at")
+  revokedAt    DateTime?       @map("revoked_at")
+  replacedById String?         @unique @map("replaced_by_id") @db.Uuid
+  createdAt    DateTime        @default(now()) @map("created_at")
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  replacedBy   RefreshSession? @relation("RefreshReplacement", fields: [replacedById], references: [id], onDelete: SetNull)
+  replacedFrom RefreshSession? @relation("RefreshReplacement")
+
+  @@index([userId, revokedAt, expiresAt])
+  @@index([expiresAt])
+  @@map("refresh_sessions")
+}
+
+model TrustedDevice {
+  id               String            @id @default(uuid()) @db.Uuid
+  userId           String            @map("user_id") @db.Uuid
+  deviceId         String            @map("device_id") @db.VarChar(128)
+  deviceName       String?           @map("device_name") @db.VarChar(160)
+  fingerprintHash  String            @map("fingerprint_hash") @db.Char(64)
+  status           DeviceStatus      @default(ACTIVE)
+  lastSeenAt       DateTime          @default(now()) @map("last_seen_at")
+  revokedAt        DateTime?         @map("revoked_at")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  playbackSessions PlaybackSession[]
+
+  @@unique([userId, deviceId])
+  @@index([userId, status])
+  @@map("trusted_devices")
+}
+
+model LoginHistory {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String?  @map("user_id") @db.Uuid
+  email     String   @db.VarChar(320)
+  succeeded Boolean
+  reason    String?  @db.VarChar(120)
+  ipAddress String   @map("ip_address") @db.Inet
+  userAgent String   @map("user_agent") @db.VarChar(512)
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([email, createdAt])
+  @@map("login_history")
+}
+
+model RoleDefinition {
+  id            String           @id @default(uuid()) @db.Uuid
+  code          RoleCode         @unique
+  name          String           @db.VarChar(80)
+  description   String?          @db.VarChar(255)
+  systemManaged Boolean          @default(true) @map("system_managed")
+  createdAt     DateTime         @default(now()) @map("created_at")
+  updatedAt     DateTime         @updatedAt @map("updated_at")
+  users         UserRole[]
+  permissions   RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String           @id @default(uuid()) @db.Uuid
+  code        String           @unique @db.VarChar(120)
+  description String?          @db.VarChar(255)
+  createdAt   DateTime         @default(now()) @map("created_at")
+  roles       RolePermission[]
+  users       UserPermission[]
+
+  @@map("permissions")
+}
+
+model UserRole {
+  userId     String         @map("user_id") @db.Uuid
+  roleId     String         @map("role_id") @db.Uuid
+  assignedAt DateTime       @default(now()) @map("assigned_at")
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role       RoleDefinition @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+model RolePermission {
+  roleId       String         @map("role_id") @db.Uuid
+  permissionId String         @map("permission_id") @db.Uuid
+  assignedAt   DateTime       @default(now()) @map("assigned_at")
+  role         RoleDefinition @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission     @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+model UserPermission {
+  userId       String     @map("user_id") @db.Uuid
+  permissionId String     @map("permission_id") @db.Uuid
+  granted      Boolean    @default(true)
+  assignedAt   DateTime   @default(now()) @map("assigned_at")
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([userId, permissionId])
+  @@index([permissionId, granted])
+  @@map("user_permissions")
+}
+
+model SubscriptionPlan {
+  id            String          @id @default(uuid()) @db.Uuid
+  code          String          @unique @db.VarChar(50)
+  name          String          @db.VarChar(120)
+  pricePkr      Int             @map("price_pkr")
+  durationDays  Int             @map("duration_days")
+  isActive      Boolean         @default(true) @map("is_active")
+  createdAt     DateTime        @default(now()) @map("created_at")
+  updatedAt     DateTime        @updatedAt @map("updated_at")
+  subscriptions Subscription[]
+  payments      PaymentRecord[]
+  subscriptionRequests SubscriptionRequest[]
+
+  @@map("subscription_plans")
+}
+
+model Subscription {
+  id          String                @id @default(uuid()) @db.Uuid
+  userId      String                @map("user_id") @db.Uuid
+  planId      String                @map("plan_id") @db.Uuid
+  status      SubscriptionStatus    @default(ACTIVE)
+  startsAt    DateTime              @map("starts_at")
+  endsAt      DateTime              @map("ends_at")
+  cancelledAt DateTime?             @map("cancelled_at")
+  note        String?               @db.VarChar(500)
+  createdAt   DateTime              @default(now()) @map("created_at")
+  updatedAt   DateTime              @updatedAt @map("updated_at")
+  user        User                  @relation(fields: [userId], references: [id], onDelete: Restrict)
+  plan        SubscriptionPlan      @relation(fields: [planId], references: [id], onDelete: Restrict)
+  history     SubscriptionHistory[]
+
+  @@index([userId, status, startsAt, endsAt])
+  @@index([endsAt])
+  @@map("subscriptions")
+}
+
+model SubscriptionHistory {
+  id             String       @id @default(uuid()) @db.Uuid
+  subscriptionId String       @map("subscription_id") @db.Uuid
+  actorId        String?      @map("actor_id") @db.Uuid
+  action         String       @db.VarChar(80)
+  oldStartsAt    DateTime?    @map("old_starts_at")
+  oldEndsAt      DateTime?    @map("old_ends_at")
+  newStartsAt    DateTime?    @map("new_starts_at")
+  newEndsAt      DateTime?    @map("new_ends_at")
+  note           String?      @db.VarChar(500)
+  createdAt      DateTime     @default(now()) @map("created_at")
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId, createdAt])
+  @@map("subscription_history")
+}
+
+model PaymentRecord {
+  id        String            @id @default(uuid()) @db.Uuid
+  userId    String            @map("user_id") @db.Uuid
+  planId    String?           @map("plan_id") @db.Uuid
+  actorId   String?           @map("actor_id") @db.Uuid
+  amountPkr Int               @map("amount_pkr")
+  method    PaymentMethod
+  status    PaymentStatus     @default(CONFIRMED)
+  reference String?           @db.VarChar(160)
+  proofKey  String?           @map("proof_key") @db.VarChar(512)
+  note      String?           @db.VarChar(500)
+  paidAt    DateTime          @map("paid_at")
+  createdAt DateTime          @default(now()) @map("created_at")
+  user      User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  plan      SubscriptionPlan? @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  @@index([userId, createdAt])
+  @@index([status, paidAt])
+  @@map("payment_records")
+}
+
+model Drama {
+  id           String    @id @default(uuid()) @db.Uuid
+  name         String    @db.VarChar(200)
+  slug         String    @unique @db.VarChar(220)
+  dramaNumber  Int?      @map("drama_number")
+  totalSeasons Int       @default(0) @map("total_seasons")
+  description  String?   @db.Text
+  thumbnailKey String?   @map("thumbnail_key") @db.VarChar(512)
+  isPublished  Boolean   @default(false) @map("is_published")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  deletedAt    DateTime? @map("deleted_at")
+  seasons      Season[]
+  trending     TrendingDrama[]
+  favoritedBy  FavoriteDrama[]
+
+  @@index([isPublished, deletedAt])
+  @@map("dramas")
+}
+
+model FavoriteDrama {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  dramaId   String   @map("drama_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  drama     Drama    @relation(fields: [dramaId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, dramaId])
+  @@index([userId, createdAt])
+  @@map("favorite_dramas")
+}
+
+model Season {
+  id           String    @id @default(uuid()) @db.Uuid
+  dramaId      String    @map("drama_id") @db.Uuid
+  seasonNumber Int       @map("season_number")
+  title        String?   @db.VarChar(200)
+  totalEpisodes Int      @default(0) @map("total_episodes")
+  thumbnailKey String?   @map("thumbnail_key") @db.VarChar(512)
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  deletedAt    DateTime? @map("deleted_at")
+  drama        Drama     @relation(fields: [dramaId], references: [id], onDelete: Restrict)
+  episodes     Episode[]
+
+  @@unique([dramaId, seasonNumber])
+  @@map("seasons")
+}
+
+model Episode {
+  id               String            @id @default(uuid()) @db.Uuid
+  seasonId         String            @map("season_id") @db.Uuid
+  episodeNumber    Int               @map("episode_number")
+  title            String?           @db.VarChar(200)
+  description      String?           @db.Text
+  thumbnailKey     String?           @map("thumbnail_key") @db.VarChar(512)
+  isPublished      Boolean           @default(false) @map("is_published")
+  status           EpisodeStatus     @default(DRAFT)
+  visibility       ContentVisibility @default(PRIVATE)
+  isPremium        Boolean           @default(true) @map("is_premium")
+  downloadAccess   DownloadAccess    @default(GALLERY) @map("download_access")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+  deletedAt        DateTime?         @map("deleted_at")
+  season           Season            @relation(fields: [seasonId], references: [id], onDelete: Restrict)
+  mediaAsset       MediaAsset?
+  grants           EpisodeGrant[]
+  playbackSessions PlaybackSession[]
+  playbackHistory  PlaybackHistory[]
+  comments         ContentComment[]
+  videoViews       VideoView[]
+
+  @@unique([seasonId, episodeNumber])
+  @@index([isPublished, deletedAt])
+  @@map("episodes")
+}
+
+model MediaAsset {
+  id               String            @id @default(uuid()) @db.Uuid
+  episodeId        String            @unique @map("episode_id") @db.Uuid
+  kind             String            @db.VarChar(20)
+  mediaType        MediaType         @default(OTHER) @map("media_type")
+  provider         String            @db.VarChar(80)
+  encryptedLocator String            @map("encrypted_locator") @db.Text
+  checksum         String?           @db.Char(64)
+  status           MediaStatus       @default(PROCESSING)
+  metadata         Json?
+  version          Int               @default(1)
+  durationSeconds  Int?              @map("duration_seconds")
+  sizeBytes        BigInt?           @map("size_bytes")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+  rotatedAt        DateTime?         @map("rotated_at")
+  deletedAt        DateTime?         @map("deleted_at")
+  episode          Episode           @relation(fields: [episodeId], references: [id], onDelete: Restrict)
+  playbackSessions PlaybackSession[]
+
+  @@index([provider, status, deletedAt])
+  @@index([status, deletedAt])
+  @@map("media_assets")
+}
+
+model PlaybackSession {
+  id                    String              @id @default(uuid()) @db.Uuid
+  userId                String              @map("user_id") @db.Uuid
+  episodeId             String              @map("episode_id") @db.Uuid
+  mediaAssetId          String              @map("media_asset_id") @db.Uuid
+  trustedDeviceId       String              @map("trusted_device_id") @db.Uuid
+  capabilityJti         String              @unique @map("capability_jti") @db.Char(36)
+  capabilityHash        String              @unique @map("capability_hash") @db.Char(64)
+  deviceFingerprintHash String              @map("device_fingerprint_hash") @db.Char(64)
+  ipAddress             String              @map("ip_address") @db.Inet
+  userAgent             String              @map("user_agent") @db.VarChar(512)
+  status                PlaybackStatus      @default(ACTIVE)
+  startedAt             DateTime            @default(now()) @map("started_at")
+  lastSeenAt            DateTime            @default(now()) @map("last_seen_at")
+  expiresAt             DateTime            @map("expires_at")
+  closedAt              DateTime?           @map("closed_at")
+  revokedAt             DateTime?           @map("revoked_at")
+  lastPositionSeconds   Int                 @default(0) @map("last_position_seconds")
+  watchedSeconds        Int                 @default(0) @map("watched_seconds")
+  user                  User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  episode               Episode             @relation(fields: [episodeId], references: [id], onDelete: Restrict)
+  mediaAsset            MediaAsset          @relation(fields: [mediaAssetId], references: [id], onDelete: Restrict)
+  trustedDevice         TrustedDevice       @relation(fields: [trustedDeviceId], references: [id], onDelete: Restrict)
+  heartbeats            PlaybackHeartbeat[]
+  history               PlaybackHistory?
+
+  @@index([userId, status, expiresAt])
+  @@index([trustedDeviceId, status, expiresAt])
+  @@index([episodeId, status])
+  @@map("playback_sessions")
+}
+
+model PlaybackHeartbeat {
+  id                String          @id @default(uuid()) @db.Uuid
+  playbackSessionId String          @map("playback_session_id") @db.Uuid
+  positionSeconds   Int             @map("position_seconds")
+  bufferedSeconds   Int?            @map("buffered_seconds")
+  createdAt         DateTime        @default(now()) @map("created_at")
+  playbackSession   PlaybackSession @relation(fields: [playbackSessionId], references: [id], onDelete: Cascade)
+
+  @@index([playbackSessionId, createdAt])
+  @@map("playback_heartbeats")
+}
+
+model PlaybackHistory {
+  id                  String          @id @default(uuid()) @db.Uuid
+  userId              String          @map("user_id") @db.Uuid
+  episodeId           String          @map("episode_id") @db.Uuid
+  playbackSessionId   String          @unique @map("playback_session_id") @db.Uuid
+  startedAt           DateTime        @map("started_at")
+  endedAt             DateTime?       @map("ended_at")
+  lastPositionSeconds Int             @default(0) @map("last_position_seconds")
+  watchedSeconds      Int             @default(0) @map("watched_seconds")
+  createdAt           DateTime        @default(now()) @map("created_at")
+  updatedAt           DateTime        @updatedAt @map("updated_at")
+  user                User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  episode             Episode         @relation(fields: [episodeId], references: [id], onDelete: Restrict)
+  playbackSession     PlaybackSession @relation(fields: [playbackSessionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, episodeId])
+  @@index([userId, updatedAt])
+  @@map("playback_history")
+}
+
+model AccessGroup {
+  id        String         @id @default(uuid()) @db.Uuid
+  name      String         @unique @db.VarChar(120)
+  createdAt DateTime       @default(now()) @map("created_at")
+  updatedAt DateTime       @updatedAt @map("updated_at")
+  members   GroupMember[]
+  grants    EpisodeGrant[] @relation("GroupEpisodeGrant")
+  messages  UserMessage[]
+  subscriptionRequests SubscriptionRequest[]
+  subscriptionSettings SubscriptionSetting[]
+
+  @@map("access_groups")
+}
+
+model GroupMember {
+  id        String      @id @default(uuid()) @db.Uuid
+  groupId   String      @map("group_id") @db.Uuid
+  userId    String      @map("user_id") @db.Uuid
+  startsAt  DateTime    @map("starts_at")
+  endsAt    DateTime    @map("ends_at")
+  revokedAt DateTime?   @map("revoked_at")
+  comment   String?     @db.Text
+  subscription Boolean  @default(false)
+  group     AccessGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+  @@index([userId, revokedAt, startsAt, endsAt])
+  @@map("group_members")
+}
+
+model EpisodeGrant {
+  id        String       @id @default(uuid()) @db.Uuid
+  episodeId String       @map("episode_id") @db.Uuid
+  userId    String?      @map("user_id") @db.Uuid
+  groupId   String?      @map("group_id") @db.Uuid
+  startsAt  DateTime     @map("starts_at")
+  endsAt    DateTime     @map("ends_at")
+  status    GrantStatus  @default(ACTIVE)
+  revokedAt DateTime?    @map("revoked_at")
+  createdAt DateTime     @default(now()) @map("created_at")
+  episode   Episode      @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  user      User?        @relation("DirectUserGrant", fields: [userId], references: [id], onDelete: Cascade)
+  group     AccessGroup? @relation("GroupEpisodeGrant", fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@index([episodeId, status, startsAt, endsAt])
+  @@index([userId, status, startsAt, endsAt])
+  @@index([groupId, status, startsAt, endsAt])
+  @@map("episode_grants")
+}
+
+model GrantHistory {
+  id        String       @id @default(uuid()) @db.Uuid
+  grantId   String       @map("grant_id") @db.Uuid
+  actorId   String?      @map("actor_id") @db.Uuid
+  action    String       @db.VarChar(80)
+  oldStatus GrantStatus? @map("old_status")
+  newStatus GrantStatus? @map("new_status")
+  oldEndsAt DateTime?    @map("old_ends_at")
+  newEndsAt DateTime?    @map("new_ends_at")
+  note      String?      @db.VarChar(500)
+  createdAt DateTime     @default(now()) @map("created_at")
+
+  @@index([grantId, createdAt])
+  @@index([actorId, createdAt])
+  @@map("grant_history")
+}
+
+model AuditEvent {
+  id         String       @id @default(uuid()) @db.Uuid
+  actorId    String?      @map("actor_id") @db.Uuid
+  action     String       @db.VarChar(120)
+  resource   String       @db.VarChar(120)
+  resourceId String?      @map("resource_id") @db.Uuid
+  outcome    AuditOutcome
+  requestId  String       @map("request_id") @db.VarChar(100)
+  ipAddress  String?      @map("ip_address") @db.Inet
+  userAgent  String?      @map("user_agent") @db.VarChar(512)
+  metadata   Json?
+  createdAt  DateTime     @default(now()) @map("created_at")
+  actor      User?        @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
+  @@index([createdAt])
+  @@map("audit_events")
+}
+
+model LegacyMigrationRecord {
+  id           String   @id @default(uuid()) @db.Uuid
+  runId        String   @map("run_id") @db.VarChar(80)
+  sourceTable  String   @map("source_table") @db.VarChar(120)
+  sourceKey    String   @map("source_key") @db.VarChar(160)
+  targetEntity String   @map("target_entity") @db.VarChar(80)
+  targetId     String   @map("target_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@unique([runId, targetEntity, sourceKey])
+  @@index([runId])
+  @@index([targetEntity, targetId])
+  @@map("legacy_migration_records")
+}
+
+model Notification {
+  id          String   @id @default(uuid()) @db.Uuid
+  createdById String   @map("created_by_id") @db.Uuid
+  title       String   @db.VarChar(255)
+  message     String   @db.Text
+  imageKey    String?  @map("image_key") @db.VarChar(512)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  deletedAt   DateTime? @map("deleted_at")
+  createdBy   User     @relation("NotificationCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  recipients  NotificationRecipient[]
+
+  @@index([createdAt])
+  @@index([deletedAt, createdAt])
+  @@map("notifications")
+}
+
+model NotificationRecipient {
+  id             String       @id @default(uuid()) @db.Uuid
+  notificationId String       @map("notification_id") @db.Uuid
+  userId         String       @map("user_id") @db.Uuid
+  readAt         DateTime?    @map("read_at")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([notificationId, userId])
+  @@index([userId, readAt, createdAt])
+  @@map("notification_recipients")
+}
+
+model UserMessage {
+  id        String      @id @default(uuid()) @db.Uuid
+  userId    String      @map("user_id") @db.Uuid
+  senderId  String?     @map("sender_id") @db.Uuid
+  groupId   String?     @map("group_id") @db.Uuid
+  message   String      @db.Text
+  status    String      @default("unread") @db.VarChar(20)
+  createdAt DateTime    @default(now()) @map("created_at")
+  updatedAt DateTime    @updatedAt @map("updated_at")
+  readAt    DateTime?   @map("read_at")
+  user      User        @relation("MessageRecipient", fields: [userId], references: [id], onDelete: Cascade)
+  sender    User?       @relation("MessageSender", fields: [senderId], references: [id], onDelete: SetNull)
+  group     AccessGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status, createdAt])
+  @@index([groupId, createdAt])
+  @@map("user_messages")
+}
+
+model Banner {
+  id        String    @id @default(uuid()) @db.Uuid
+  imageKey  String?   @map("image_key") @db.VarChar(512)
+  videoKey  String?   @map("video_key") @db.VarChar(512)
+  isActive  Boolean   @default(true) @map("is_active")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  @@index([isActive, deletedAt, createdAt])
+  @@map("banners")
+}
+
+model TrendingDrama {
+  id        String   @id @default(uuid()) @db.Uuid
+  dramaId   String   @map("drama_id") @db.Uuid
+  position  Int
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  drama     Drama    @relation(fields: [dramaId], references: [id], onDelete: Cascade)
+
+  @@unique([position])
+  @@unique([dramaId])
+  @@index([position])
+  @@map("trending_dramas")
+}
+
+model AppRelease {
+  id           String    @id @default(uuid()) @db.Uuid
+  versionName  String?   @map("version_name") @db.VarChar(60)
+  versionCode  Int?      @map("version_code")
+  storageKey   String    @map("storage_key") @db.VarChar(512)
+  originalName String?   @map("original_name") @db.VarChar(255)
+  fileSize     BigInt?   @map("file_size")
+  isActive     Boolean   @default(true) @map("is_active")
+  uploadedById String?   @map("uploaded_by_id") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  uploadedBy   User?     @relation("ReleaseUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([isActive, createdAt])
+  @@index([versionCode])
+  @@map("app_releases")
+}
+
+model RemoteConfig {
+  id        String   @id @default(uuid()) @db.Uuid
+  configKey String   @unique @map("config_key") @db.VarChar(120)
+  value     Json
+  isActive  Boolean  @default(true) @map("is_active")
+  updatedById String? @map("updated_by_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([isActive, updatedAt])
+  @@map("remote_config")
+}
+
+model SubscriptionSetting {
+  id                  String   @id @default(uuid()) @db.Uuid
+  monthlyAmountPkr    Int      @default(1000) @map("monthly_amount_pkr")
+  currency            String   @default("PKR") @db.VarChar(10)
+  defaultGroupId      String?  @map("default_group_id") @db.Uuid
+  jazzcashNumber      String?  @map("jazzcash_number") @db.VarChar(50)
+  jazzcashTitle       String?  @map("jazzcash_title") @db.VarChar(160)
+  easypaisaNumber     String?  @map("easypaisa_number") @db.VarChar(50)
+  easypaisaTitle      String?  @map("easypaisa_title") @db.VarChar(160)
+  bankName            String?  @map("bank_name") @db.VarChar(160)
+  bankAccountTitle    String?  @map("bank_account_title") @db.VarChar(160)
+  bankAccountNumber  String?  @map("bank_account_number") @db.VarChar(80)
+  bankIban            String?  @map("bank_iban") @db.VarChar(80)
+  paymentInstructions String? @map("payment_instructions") @db.Text
+  updatedById         String?  @map("updated_by_id") @db.Uuid
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+  defaultGroup        AccessGroup? @relation(fields: [defaultGroupId], references: [id], onDelete: SetNull)
+
+  @@map("subscription_settings")
+}
+
+model SubscriptionRequest {
+  id                    String   @id @default(uuid()) @db.Uuid
+  userId                String   @map("user_id") @db.Uuid
+  groupId               String?  @map("group_id") @db.Uuid
+  planId                String?  @map("plan_id") @db.Uuid
+  amountPkr             Int      @default(0) @map("amount_pkr")
+  currency              String   @default("PKR") @db.VarChar(10)
+  paymentMethod         String?  @map("payment_method") @db.VarChar(40)
+  screenshotKey         String?  @map("screenshot_key") @db.VarChar(512)
+  note                  String?  @db.Text
+  detailsSnapshot       Json?    @map("details_snapshot")
+  status                String   @default("pending") @db.VarChar(20)
+  adminNote             String?  @map("admin_note") @db.Text
+  invoiceNo             String?  @unique @map("invoice_no") @db.VarChar(80)
+  monthsAdded           Int      @default(1) @map("months_added")
+  subscriptionStartDate DateTime? @map("subscription_start_date") @db.Date
+  subscriptionEndDate   DateTime? @map("subscription_end_date") @db.Date
+  approvedById          String?  @map("approved_by_id") @db.Uuid
+  approvedAt            DateTime? @map("approved_at")
+  rejectedAt            DateTime? @map("rejected_at")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+  user                  User     @relation("SubscriptionRequester", fields: [userId], references: [id], onDelete: Cascade)
+  group                 AccessGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  plan                  SubscriptionPlan? @relation(fields: [planId], references: [id], onDelete: SetNull)
+  approvedBy            User?    @relation("SubscriptionApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  @@index([userId, status, createdAt])
+  @@index([status, createdAt])
+  @@map("subscription_requests")
+}
+
+model SecurityBlock {
+  userId    String   @id @map("user_id") @db.Uuid
+  isBlocked Boolean  @default(false) @map("is_blocked")
+  message   String?  @db.Text
+  blockedById String? @map("blocked_by_id") @db.Uuid
+  blockedAt DateTime? @map("blocked_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("security_blocks")
+}
+
+model AccountDeletionRequest {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  reason       String?   @db.Text
+  status       String    @default("pending") @db.VarChar(20)
+  adminNote    String?   @map("admin_note") @db.Text
+  reviewedById String?   @map("reviewed_by_id") @db.Uuid
+  reviewedAt   DateTime? @map("reviewed_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  user         User      @relation("AccountDeletionRequester", fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy   User?     @relation("AccountDeletionReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([userId, status, createdAt])
+  @@index([status, createdAt])
+  @@map("account_deletion_requests")
+}
+
+model SecurityIncident {
+  id               String   @id @default(uuid()) @db.Uuid
+  userId           String?  @map("user_id") @db.Uuid
+  incidentType     String   @map("incident_type") @db.VarChar(80)
+  incidentLabel    String?  @map("incident_label") @db.VarChar(160)
+  appArea          String?  @map("app_area") @db.VarChar(120)
+  deviceModel      String?  @map("device_model") @db.VarChar(160)
+  manufacturer     String?  @db.VarChar(120)
+  androidVersion   String?  @map("android_version") @db.VarChar(60)
+  appVersion       String?  @map("app_version") @db.VarChar(60)
+  appVersionCode   Int?     @map("app_version_code")
+  packageName      String?  @map("package_name") @db.VarChar(160)
+  deviceId         String?  @map("device_id") @db.VarChar(160)
+  deviceBrand      String?  @map("device_brand") @db.VarChar(120)
+  deviceProduct    String?  @map("device_product") @db.VarChar(160)
+  deviceHardware   String?  @map("device_hardware") @db.VarChar(160)
+  deviceFingerprint String? @map("device_fingerprint") @db.VarChar(255)
+  latitude         Decimal? @db.Decimal(10, 7)
+  longitude        Decimal? @db.Decimal(10, 7)
+  locationAccuracy Float?   @map("location_accuracy")
+  extra            Json?
+  ipAddress        String?  @map("ip_address") @db.Inet
+  severity         String   @default("info") @db.VarChar(30)
+  createdAt        DateTime @default(now()) @map("created_at")
+  user             User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([userId])
+  @@index([incidentType])
+  @@index([deviceId])
+  @@map("security_incidents")
+}
+
+model ContentComment {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  episodeId String?  @map("episode_id") @db.Uuid
+  groupId   String?  @map("group_id") @db.Uuid
+  body      String   @db.Text
+  status    String   @default("visible") @db.VarChar(20)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  episode   Episode? @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+
+  @@index([episodeId, status, createdAt])
+  @@index([userId, createdAt])
+  @@map("content_comments")
+}
+
+model VideoView {
+  id        String   @id @default(uuid()) @db.Uuid
+  episodeId String   @map("episode_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  viewedAt  DateTime @default(now()) @map("viewed_at")
+  ipAddress String?  @map("ip_address") @db.Inet
+  userAgent String?  @map("user_agent") @db.VarChar(512)
+  episode   Episode  @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([episodeId, viewedAt])
+  @@index([userId, viewedAt])
+  @@map("video_views")
+}

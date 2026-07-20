@@ -1,0 +1,49 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Immutable image tag, normally a commit SHA
+        required: true
+        type: string
+      rollback_tag:
+        description: Existing known-good image tag used only when rollback is requested
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy and verify
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          fingerprint: ${{ secrets.DEPLOY_HOST_FINGERPRINT }}
+          script_stop: true
+          script: |
+            set -eu
+            cd '${{ secrets.DEPLOY_PATH }}'
+            export IMAGE_REPOSITORY='ghcr.io/${{ github.repository }}'
+            export IMAGE_TAG='${{ inputs.image_tag }}'
+            docker compose -f docker-compose.production.yml pull api
+            docker compose -f docker-compose.production.yml run --rm api npx prisma migrate deploy
+            docker compose -f docker-compose.production.yml up -d api
+            for attempt in $(seq 1 30); do
+              if curl --fail --silent http://127.0.0.1:3000/health/ready >/dev/null; then exit 0; fi
+              sleep 2
+            done
+            echo 'Deployment health check failed; restoring the previous image.'
+            export IMAGE_TAG='${{ inputs.rollback_tag }}'
+            test -n "$IMAGE_TAG"
+            docker compose -f docker-compose.production.yml up -d api
+            exit 1
