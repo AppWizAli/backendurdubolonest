@@ -23,5 +23,5 @@
       "@/*": ["src/*"]
     }
   },
-  "exclude": ["node_modules", "Urrrdu Bolo Panle"]
+  "exclude": ["node_modules", "dist", "test", "scripts", "**/*.spec.ts", "Urrrdu Bolo Panle"]
 }
