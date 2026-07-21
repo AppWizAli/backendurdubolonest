@@ -17,7 +17,11 @@ export class RedisRateLimitGuard implements CanActivate {
     const route = `${request.method}:${request.route?.path ?? request.path}`;
     const scope = options.scope ?? 'route';
     const key = `rl:${scope}:${route}:${actor}`;
-    const count = await this.redis.incrementWithExpiry(key, options.windowSeconds);
+    const count = await this.redis.incrementWithExpiry(key, options.windowSeconds).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : 'unknown';
+      process.stderr.write(JSON.stringify({ level: 'warn', event: 'rate_limit_unavailable', scope, route, message }) + '\n');
+      return 0;
+    });
     if (count > options.limit) throw new HttpException('Rate limit exceeded', HttpStatus.TOO_MANY_REQUESTS);
     return true;
   }
