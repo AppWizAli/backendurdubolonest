@@ -1,8 +1,9 @@
 import { BadRequestException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { extname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import { AuditService } from '../common/audit/audit.service';
@@ -16,7 +17,21 @@ type UploadManifest = InitUploadDto & { uploadId: string; actorId: string; creat
 export class UploadsService {
   private readonly maxChunkBytes = 8 * 1024 * 1024;
   private readonly root: string;
-  constructor(private readonly config: ConfigService, private readonly prisma: PrismaService, private readonly redis: RedisService, private readonly audit: AuditService, private readonly cipher: MediaLocatorCipherService) { this.root = config.get<string>('UPLOAD_STAGING_DIR', '.runtime/uploads'); }
+  private readonly r2Client: S3Client | null;
+
+  constructor(private readonly config: ConfigService, private readonly prisma: PrismaService, private readonly redis: RedisService, private readonly audit: AuditService, private readonly cipher: MediaLocatorCipherService) {
+    this.root = config.get<string>('UPLOAD_STAGING_DIR', '.runtime/uploads');
+    const accountId = config.get<string>('R2_ACCOUNT_ID', '');
+    const accessKeyId = config.get<string>('R2_ACCESS_KEY_ID', '');
+    const secretAccessKey = config.get<string>('R2_SECRET_ACCESS_KEY', '');
+    this.r2Client = accountId && accessKeyId && secretAccessKey
+      ? new S3Client({
+        region: 'auto',
+        endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+        credentials: { accessKeyId, secretAccessKey },
+      })
+      : null;
+  }
 
   async init(dto: InitUploadDto, actor: AuthenticatedPrincipal, requestId: string) {
     if (dto.sizeBytes > this.config.get<number>('MAX_UPLOAD_BYTES', 20_000_000_000)) throw new BadRequestException('File is too large');
@@ -59,6 +74,8 @@ export class UploadsService {
   async cancel(uploadId: string, actor: AuthenticatedPrincipal, requestId: string) { await this.manifest(uploadId, actor); await this.cleanup(uploadId); await this.redis.delete(this.key(uploadId)); await this.audit.write({ actorId: actor.id, action: 'upload.cancel', resource: 'upload', resourceId: uploadId, outcome: 'SUCCESS', requestId }); return { success: true }; }
 
   private async forward(manifest: UploadManifest, file: Buffer): Promise<{ storageKey?: string; url?: string }> {
+    const r2 = await this.forwardToR2(manifest, file);
+    if (r2) return r2;
     const endpoint = this.config.get<string>('STORAGE_UPLOAD_URL', '');
     if (!endpoint) return {};
     let url: URL;
@@ -74,6 +91,32 @@ export class UploadsService {
     const body = await response.json() as { storageKey?: string; url?: string };
     if (!body.storageKey && !body.url) throw new ServiceUnavailableException('Storage upload response is invalid');
     return body;
+  }
+
+  private async forwardToR2(manifest: UploadManifest, file: Buffer): Promise<{ storageKey: string; url: string } | null> {
+    if (!this.r2Client) return null;
+    const bucket = this.config.get<string>('R2_BUCKET', '');
+    const publicBaseUrl = this.config.get<string>('R2_PUBLIC_BASE_URL', '').replace(/\/+$/, '');
+    if (!bucket || !publicBaseUrl) throw new ServiceUnavailableException('R2 storage is not fully configured');
+    const key = this.storageKey(manifest);
+    await this.r2Client.send(new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: file,
+      ContentType: manifest.mimeType || 'application/octet-stream',
+      ContentLength: file.length,
+      CacheControl: manifest.purpose === 'episode_video' ? 'private, max-age=0' : 'public, max-age=31536000, immutable',
+    }));
+    return { storageKey: key, url: `${publicBaseUrl}/${key}` };
+  }
+
+  private storageKey(manifest: UploadManifest): string {
+    const now = new Date();
+    const year = now.getUTCFullYear();
+    const month = String(now.getUTCMonth() + 1).padStart(2, '0');
+    const rawExt = extname(manifest.originalName).toLowerCase().replace(/[^a-z0-9.]/g, '');
+    const ext = rawExt && rawExt.length <= 10 ? rawExt : '';
+    return `${manifest.purpose}/${year}/${month}/${randomUUID()}${ext}`;
   }
 
   private async manifest(uploadId: string, actor: AuthenticatedPrincipal) { const value = await this.redis.getJson<UploadManifest>(this.key(uploadId)); if (!value || value.actorId !== actor.id) throw new NotFoundException('Upload session not found'); return value; }
