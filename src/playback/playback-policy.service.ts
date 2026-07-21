@@ -32,10 +32,11 @@ export class PlaybackPolicyService {
     if (!episode.mediaAsset || episode.mediaAsset.deletedAt || episode.mediaAsset.status !== 'ACTIVE') throw new ForbiddenException('Media is not available');
 
     if (episode.isPremium) {
-      const subscription = await this.subscriptions.validate(principal.id);
-      if (!subscription.active) { await this.denied(principal.id, episodeId, 'subscription_missing', requestId); throw new ForbiddenException('An active subscription is required'); }
-      const grant = await this.access.validate(episodeId, principal);
-      if (!grant.allowed) { await this.denied(principal.id, episodeId, 'episode_access_missing', requestId); throw new ForbiddenException('Episode access is not granted'); }
+      const [subscription, grant] = await Promise.all([
+        this.subscriptions.validate(principal.id),
+        this.access.validate(episodeId, principal),
+      ]);
+      if (!subscription.active && !grant.allowed) { await this.denied(principal.id, episodeId, 'subscription_or_episode_access_missing', requestId); throw new ForbiddenException('An active subscription or episode access is required'); }
     }
 
     const fingerprintHash = this.token.fingerprintHash(device.fingerprint);
