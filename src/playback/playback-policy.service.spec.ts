@@ -13,6 +13,23 @@ function basePrisma() {
 }
 
 describe('PlaybackPolicyService', () => {
+  it('allows public non-premium episodes without subscription or explicit episode grant', async () => {
+    const prisma = basePrisma();
+    prisma.episode.findFirst.mockResolvedValue({ id: '00000000-0000-0000-0000-000000000003', isPremium: false, mediaAsset: { id: '00000000-0000-0000-0000-000000000004', mediaType: 'MP4', encryptedLocator: 'v1.locator', status: 'ACTIVE', deletedAt: null } });
+    const subscriptions = { validate: jest.fn() };
+    const access = { validate: jest.fn() };
+    const service = new PlaybackPolicyService(prisma, subscriptions as any, access as any, { getOrThrow: jest.fn().mockReturnValue(1) } as any, { fingerprintHash: jest.fn().mockReturnValue('fingerprint-hash') } as any, { write: jest.fn() } as any);
+    await expect(service.authorize(principal, '00000000-0000-0000-0000-000000000003', device, false, 'request-id')).resolves.toMatchObject({ isPremium: false, mediaType: 'MP4' });
+    expect(subscriptions.validate).not.toHaveBeenCalled();
+    expect(access.validate).not.toHaveBeenCalled();
+  });
+
+  it('still requires subscription and episode access for premium episodes', async () => {
+    const prisma = basePrisma();
+    const service = new PlaybackPolicyService(prisma, { validate: jest.fn().mockResolvedValue({ active: false }) } as any, { validate: jest.fn().mockResolvedValue({ allowed: false }) } as any, { getOrThrow: jest.fn().mockReturnValue(1) } as any, { fingerprintHash: jest.fn().mockReturnValue('fingerprint-hash') } as any, { write: jest.fn() } as any);
+    await expect(service.authorize(principal, '00000000-0000-0000-0000-000000000003', device, false, 'request-id')).rejects.toThrow('An active subscription is required');
+  });
+
   it('rejects a second concurrent session at the configured limit', async () => {
     const prisma = basePrisma();
     prisma.playbackSession.count.mockResolvedValue(1);

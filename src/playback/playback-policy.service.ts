@@ -31,10 +31,12 @@ export class PlaybackPolicyService {
     if (!episode) throw new NotFoundException('Published episode not found');
     if (!episode.mediaAsset || episode.mediaAsset.deletedAt || episode.mediaAsset.status !== 'ACTIVE') throw new ForbiddenException('Media is not available');
 
-    const subscription = await this.subscriptions.validate(principal.id);
-    if (!subscription.active) { await this.denied(principal.id, episodeId, 'subscription_missing', requestId); throw new ForbiddenException('An active subscription is required'); }
-    const grant = await this.access.validate(episodeId, principal);
-    if (!grant.allowed) { await this.denied(principal.id, episodeId, 'episode_access_missing', requestId); throw new ForbiddenException('Episode access is not granted'); }
+    if (episode.isPremium) {
+      const subscription = await this.subscriptions.validate(principal.id);
+      if (!subscription.active) { await this.denied(principal.id, episodeId, 'subscription_missing', requestId); throw new ForbiddenException('An active subscription is required'); }
+      const grant = await this.access.validate(episodeId, principal);
+      if (!grant.allowed) { await this.denied(principal.id, episodeId, 'episode_access_missing', requestId); throw new ForbiddenException('Episode access is not granted'); }
+    }
 
     const fingerprintHash = this.token.fingerprintHash(device.fingerprint);
     const trustedDevice = await this.prisma.trustedDevice.findUnique({ where: { userId_deviceId: { userId: principal.id, deviceId: device.deviceId } }, select: { id: true, status: true, fingerprintHash: true } });
