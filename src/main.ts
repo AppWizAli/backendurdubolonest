@@ -79,6 +79,7 @@ async function bootstrap(): Promise<void> {
   preflightEnvironment();
   preflightSecrets();
   const app = await NestFactory.create(AppModule, {
+    abortOnError: false,
     bodyParser: false,
     logger: false,
   });
