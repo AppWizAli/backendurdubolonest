@@ -50,6 +50,7 @@ export class PlaybackPolicyService {
   }
 
   private async denied(actorId: string, episodeId: string, reason: string, requestId: string): Promise<void> {
+    process.stderr.write(JSON.stringify({ level: 'warn', event: 'playback_authorization_denied', actorId, episodeId, reason, requestId }) + '\n');
     try { await this.audit.write({ actorId, action: 'playback.authorization_denied', resource: 'episode', resourceId: episodeId, outcome: 'DENIED', requestId, metadata: { reason } }); } catch { /* Request rejection must not leak audit storage details. */ }
   }
 }
