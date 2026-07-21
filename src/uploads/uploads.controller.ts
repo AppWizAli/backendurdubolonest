@@ -12,7 +12,7 @@ import { InitUploadDto, UploadChunkDto } from './uploads.dto';
 export class UploadsController {
   constructor(private readonly uploads: UploadsService) {}
   @Post('init') @Permissions('media.write') init(@Body() dto: InitUploadDto, @CurrentPrincipal() actor: AuthenticatedPrincipal, @Req() request: Request) { return this.uploads.init(dto, actor, request.requestId!); }
-  @Post(':id/chunks') @Permissions('media.write') @ApiConsumes('multipart/form-data') @UseInterceptors(FileInterceptor('chunk', { limits: { fileSize: 8 * 1024 * 1024 } })) chunk(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UploadChunkDto, @UploadedFile() file: { buffer: Buffer; size: number }, @CurrentPrincipal() actor: AuthenticatedPrincipal, @Req() request: Request) { return this.uploads.chunk(id, dto.chunkIndex, file, actor, request.requestId!); }
+  @Post(':id/chunks') @Permissions('media.write') @ApiConsumes('multipart/form-data') @UseInterceptors(FileInterceptor('chunk', { limits: { fileSize: 16 * 1024 * 1024 } })) chunk(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UploadChunkDto, @UploadedFile() file: { buffer: Buffer; size: number }, @CurrentPrincipal() actor: AuthenticatedPrincipal, @Req() request: Request) { return this.uploads.chunk(id, dto.chunkIndex, file, actor, request.requestId!); }
   @Post(':id/complete') @Permissions('media.write') complete(@Param('id', ParseUUIDPipe) id: string, @CurrentPrincipal() actor: AuthenticatedPrincipal, @Req() request: Request) { return this.uploads.complete(id, actor, request.requestId!); }
   @Delete(':id') @Permissions('media.write') cancel(@Param('id', ParseUUIDPipe) id: string, @CurrentPrincipal() actor: AuthenticatedPrincipal, @Req() request: Request) { return this.uploads.cancel(id, actor, request.requestId!); }
 }

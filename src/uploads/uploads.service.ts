@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { AbortMultipartUploadCommand, CompleteMultipartUploadCommand, CreateMultipartUploadCommand, PutObjectCommand, S3Client, UploadPartCommand } from '@aws-sdk/client-s3';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import { AuditService } from '../common/audit/audit.service';
@@ -11,11 +11,18 @@ import { AuthenticatedPrincipal } from '../common/auth/auth.types';
 import { MediaLocatorCipherService } from '../media-gateway/media-locator-cipher.service';
 import { InitUploadDto } from './uploads.dto';
 
-type UploadManifest = InitUploadDto & { uploadId: string; actorId: string; createdAt: string; chunks: number[] };
+type R2Part = { chunkIndex: number; partNumber: number; eTag: string; size: number };
+type UploadManifest = InitUploadDto & {
+  uploadId: string;
+  actorId: string;
+  createdAt: string;
+  chunks: number[];
+  r2?: { key: string; providerUploadId: string; parts: R2Part[]; uploadedBytes: number };
+};
 
 @Injectable()
 export class UploadsService {
-  private readonly maxChunkBytes = 8 * 1024 * 1024;
+  private readonly maxChunkBytes = 16 * 1024 * 1024;
   private readonly root: string;
   private readonly r2Client: S3Client | null;
 
@@ -37,7 +44,22 @@ export class UploadsService {
     if (dto.sizeBytes > this.config.get<number>('MAX_UPLOAD_BYTES', 20_000_000_000)) throw new BadRequestException('File is too large');
     const uploadId = randomUUID();
     const manifest: UploadManifest = { ...dto, uploadId, actorId: actor.id, createdAt: new Date().toISOString(), chunks: [] };
-    await mkdir(join(this.root, uploadId, 'chunks'), { recursive: true });
+    if (this.r2Client) {
+      const bucket = this.config.get<string>('R2_BUCKET', '');
+      const publicBaseUrl = this.config.get<string>('R2_PUBLIC_BASE_URL', '').replace(/\/+$/, '');
+      if (!bucket || !publicBaseUrl) throw new ServiceUnavailableException('R2 storage is not fully configured');
+      const key = this.storageKey(manifest);
+      const multipart = await this.r2Client.send(new CreateMultipartUploadCommand({
+        Bucket: bucket,
+        Key: key,
+        ContentType: dto.mimeType || 'application/octet-stream',
+        CacheControl: dto.purpose === 'episode_video' ? 'private, max-age=0' : 'public, max-age=31536000, immutable',
+      }));
+      if (!multipart.UploadId) throw new ServiceUnavailableException('R2 multipart upload could not start');
+      manifest.r2 = { key, providerUploadId: multipart.UploadId, parts: [], uploadedBytes: 0 };
+    } else {
+      await mkdir(join(this.root, uploadId, 'chunks'), { recursive: true });
+    }
     await this.redis.setJson(this.key(uploadId), manifest, 24 * 60 * 60);
     await this.audit.write({ actorId: actor.id, action: 'upload.init', resource: 'upload', resourceId: uploadId, outcome: 'SUCCESS', requestId, metadata: { purpose: dto.purpose, sizeBytes: dto.sizeBytes, totalChunks: dto.totalChunks } });
     return { uploadId, chunkSizeBytes: this.maxChunkBytes, expiresInSeconds: 86400 };
@@ -47,7 +69,32 @@ export class UploadsService {
     const manifest = await this.manifest(uploadId, actor);
     if (!Number.isInteger(chunkIndex) || chunkIndex < 0 || chunkIndex >= manifest.totalChunks) throw new BadRequestException('Chunk index is invalid');
     if (!file || !file.buffer || file.size > this.maxChunkBytes) throw new BadRequestException('Chunk is missing or too large');
-    await writeFile(join(this.root, uploadId, 'chunks', `${chunkIndex}.part`), file.buffer, { flag: 'w' });
+    if (manifest.r2) {
+      const partNumber = chunkIndex + 1;
+      const isLastChunk = chunkIndex === manifest.totalChunks - 1;
+      if (!isLastChunk && file.size < 5 * 1024 * 1024) throw new BadRequestException('Chunk is too small for multipart storage');
+      const bucket = this.config.get<string>('R2_BUCKET', '');
+      const result = await this.r2Client!.send(new UploadPartCommand({
+        Bucket: bucket,
+        Key: manifest.r2.key,
+        UploadId: manifest.r2.providerUploadId,
+        PartNumber: partNumber,
+        Body: file.buffer,
+        ContentLength: file.size,
+      }));
+      if (!result.ETag) throw new ServiceUnavailableException('R2 upload part did not return an ETag');
+      const previous = manifest.r2.parts.find((part) => part.chunkIndex === chunkIndex);
+      if (previous) {
+        manifest.r2.uploadedBytes -= previous.size;
+        previous.eTag = result.ETag;
+        previous.size = file.size;
+      } else {
+        manifest.r2.parts.push({ chunkIndex, partNumber, eTag: result.ETag, size: file.size });
+      }
+      manifest.r2.uploadedBytes += file.size;
+    } else {
+      await writeFile(join(this.root, uploadId, 'chunks', `${chunkIndex}.part`), file.buffer, { flag: 'w' });
+    }
     if (!manifest.chunks.includes(chunkIndex)) manifest.chunks.push(chunkIndex);
     manifest.chunks.sort((a, b) => a - b);
     await this.redis.setJson(this.key(uploadId), manifest, 24 * 60 * 60);
@@ -58,6 +105,27 @@ export class UploadsService {
   async complete(uploadId: string, actor: AuthenticatedPrincipal, requestId: string) {
     const manifest = await this.manifest(uploadId, actor);
     if (manifest.chunks.length !== manifest.totalChunks) throw new BadRequestException('Not all upload chunks have been received');
+    if (manifest.r2) {
+      if (manifest.r2.parts.length !== manifest.totalChunks) throw new BadRequestException('Not all storage parts have been received');
+      if (manifest.r2.uploadedBytes !== manifest.sizeBytes) throw new BadRequestException('Uploaded file size does not match the manifest');
+      const bucket = this.config.get<string>('R2_BUCKET', '');
+      const publicBaseUrl = this.config.get<string>('R2_PUBLIC_BASE_URL', '').replace(/\/+$/, '');
+      await this.r2Client!.send(new CompleteMultipartUploadCommand({
+        Bucket: bucket,
+        Key: manifest.r2.key,
+        UploadId: manifest.r2.providerUploadId,
+        MultipartUpload: {
+          Parts: manifest.r2.parts
+            .sort((a, b) => a.partNumber - b.partNumber)
+            .map((part) => ({ ETag: part.eTag, PartNumber: part.partNumber })),
+        },
+      }));
+      const remote = { storageKey: manifest.r2.key, url: `${publicBaseUrl}/${manifest.r2.key}` };
+      const result = manifest.purpose === 'episode_video' ? { encryptedLocator: this.cipher.encrypt(remote.url), storageKey: undefined } : { storageKey: remote.storageKey };
+      await this.redis.delete(this.key(uploadId));
+      await this.audit.write({ actorId: actor.id, action: 'upload.complete', resource: 'upload', resourceId: uploadId, outcome: 'SUCCESS', requestId, metadata: { purpose: manifest.purpose, sizeBytes: manifest.r2.uploadedBytes, remote: true } });
+      return { uploadId, purpose: manifest.purpose, originalName: manifest.originalName, fileSize: manifest.r2.uploadedBytes, ...result };
+    }
     const buffers: Buffer[] = [];
     for (let index = 0; index < manifest.totalChunks; index += 1) buffers.push(await readFile(join(this.root, uploadId, 'chunks', `${index}.part`)));
     const combined = Buffer.concat(buffers);
@@ -71,7 +139,18 @@ export class UploadsService {
     return { uploadId, purpose: manifest.purpose, originalName: manifest.originalName, fileSize: combined.length, ...result };
   }
 
-  async cancel(uploadId: string, actor: AuthenticatedPrincipal, requestId: string) { await this.manifest(uploadId, actor); await this.cleanup(uploadId); await this.redis.delete(this.key(uploadId)); await this.audit.write({ actorId: actor.id, action: 'upload.cancel', resource: 'upload', resourceId: uploadId, outcome: 'SUCCESS', requestId }); return { success: true }; }
+  async cancel(uploadId: string, actor: AuthenticatedPrincipal, requestId: string) {
+    const manifest = await this.manifest(uploadId, actor);
+    if (manifest.r2) {
+      const bucket = this.config.get<string>('R2_BUCKET', '');
+      await this.r2Client!.send(new AbortMultipartUploadCommand({ Bucket: bucket, Key: manifest.r2.key, UploadId: manifest.r2.providerUploadId })).catch(() => undefined);
+    } else {
+      await this.cleanup(uploadId);
+    }
+    await this.redis.delete(this.key(uploadId));
+    await this.audit.write({ actorId: actor.id, action: 'upload.cancel', resource: 'upload', resourceId: uploadId, outcome: 'SUCCESS', requestId });
+    return { success: true };
+  }
 
   private async forward(manifest: UploadManifest, file: Buffer): Promise<{ storageKey?: string; url?: string }> {
     const r2 = await this.forwardToR2(manifest, file);
