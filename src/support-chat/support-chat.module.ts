@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { AuditModule } from '../common/audit/audit.module';
 import { PrismaModule } from '../prisma/prisma.module';
+import { UploadsModule } from '../uploads/uploads.module';
 import { SupportChatController } from './support-chat.controller';
 import { SupportChatGateway } from './support-chat.gateway';
 import { SupportChatService } from './support-chat.service';
@@ -12,6 +13,7 @@ import { SupportChatService } from './support-chat.service';
     ConfigModule,
     PrismaModule,
     AuditModule,
+    UploadsModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

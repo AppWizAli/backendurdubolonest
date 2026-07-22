@@ -2,7 +2,7 @@ import { IsIn, IsInt, IsOptional, IsString, IsUUID, Max, Min } from 'class-valid
 import { Type } from 'class-transformer';
 
 export class InitUploadDto {
-  @IsIn(['episode_video', 'thumbnail', 'notification_image', 'banner', 'apk'])
+  @IsIn(['episode_video', 'thumbnail', 'notification_image', 'banner', 'apk', 'support_attachment'])
   purpose!: string;
   @IsOptional() @IsUUID() targetId?: string;
   @IsString() originalName!: string;

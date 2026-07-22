@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, RoleCode, SupportConversationStatus, SupportMessageSenderType, SupportMessageStatus, SupportMessageType, UserStatus } from '@prisma/client';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
@@ -6,6 +6,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuthenticatedPrincipal } from '../common/auth/auth.types';
 import { AuditService } from '../common/audit/audit.service';
 import { SupportConversationQueryDto, SupportMessageQueryDto } from './dto/support-chat.dto';
+import { CreateSupportMessageDto } from './dto/support-chat.dto';
 
 const WELCOME_TEXT = 'Welcome to Urdu Bolo Support.\nHow can we help you today?';
 
@@ -141,17 +142,17 @@ export class SupportChatService {
     return { items: items.reverse().map((item) => this.presentMessage(item)), page: query.page, limit: query.limit, total, totalPages: Math.ceil(total / query.limit) };
   }
 
-  async sendUserMessage(actor: AuthenticatedPrincipal, text: string, requestId?: string) {
+  async sendUserMessage(actor: AuthenticatedPrincipal, dto: string | CreateSupportMessageDto, requestId?: string) {
     const conversation = await this.ensureConversationForUser(actor.id);
-    const message = await this.createMessage(conversation.id, actor, SupportMessageSenderType.USER, text);
+    const message = await this.createMessage(conversation.id, actor, SupportMessageSenderType.USER, dto);
     if (requestId) await this.audit.write({ actorId: actor.id, action: 'support.message_user_create', resource: 'support_conversation', resourceId: conversation.id, outcome: 'SUCCESS', requestId });
     return message;
   }
 
-  async sendAdminMessage(conversationId: string, actor: AuthenticatedPrincipal, text: string, requestId?: string) {
+  async sendAdminMessage(conversationId: string, actor: AuthenticatedPrincipal, dto: string | CreateSupportMessageDto, requestId?: string) {
     this.assertStaff(actor);
     const conversation = await this.requireConversation(conversationId, actor);
-    const message = await this.createMessage(conversation.id, actor, SupportMessageSenderType.ADMIN, text);
+    const message = await this.createMessage(conversation.id, actor, SupportMessageSenderType.ADMIN, dto);
     if (requestId) await this.audit.write({ actorId: actor.id, action: 'support.message_admin_create', resource: 'support_conversation', resourceId: conversation.id, outcome: 'SUCCESS', requestId });
     return message;
   }
@@ -182,16 +183,25 @@ export class SupportChatService {
     return this.presentMessage(item);
   }
 
-  private async createMessage(conversationId: string, actor: AuthenticatedPrincipal, senderType: SupportMessageSenderType, text: string) {
+  private async createMessage(conversationId: string, actor: AuthenticatedPrincipal, senderType: SupportMessageSenderType, input: string | CreateSupportMessageDto) {
     const now = new Date();
+    const payload = typeof input === 'string' ? { text: input } : input;
+    const messageType = (payload.messageType ?? (payload.mediaUrl ? 'FILE' : 'TEXT')) as SupportMessageType;
+    const text = (payload.text ?? payload.message ?? '').trim();
+    if (!text && !payload.mediaUrl) throw new BadRequestException('Message text or media is required');
     const message = await this.prisma.$transaction(async (tx) => {
       const item = await tx.supportMessage.create({
         data: {
           conversationId,
           senderType,
           senderId: actor.id,
-          messageType: SupportMessageType.TEXT,
-          text: text.trim(),
+          messageType,
+          text: text || payload.originalName || messageType,
+          mediaUrl: payload.mediaUrl,
+          thumbnail: payload.thumbnail,
+          voiceDuration: payload.voiceDuration,
+          fileSize: payload.fileSize ? BigInt(payload.fileSize) : undefined,
+          mimeType: payload.mimeType,
           status: SupportMessageStatus.DELIVERED,
           deliveredAt: now,
         },

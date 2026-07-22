@@ -13,7 +13,15 @@ export class SupportConversationQueryDto extends SupportMessageQueryDto {
 }
 
 export class CreateSupportMessageDto {
-  @IsString() @Length(1, 5000) text!: string;
+  @IsOptional() @IsString() @Length(1, 5000) text?: string;
+  @IsOptional() @IsString() @Length(1, 5000) message?: string;
+  @IsOptional() @IsIn(['TEXT', 'IMAGE', 'VIDEO', 'VOICE', 'FILE']) messageType?: 'TEXT' | 'IMAGE' | 'VIDEO' | 'VOICE' | 'FILE';
+  @IsOptional() @IsString() @Length(1, 2048) mediaUrl?: string;
+  @IsOptional() @IsString() @Length(1, 2048) thumbnail?: string;
+  @IsOptional() @IsString() @Length(1, 160) mimeType?: string;
+  @IsOptional() @IsString() @Length(1, 255) originalName?: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) fileSize?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) voiceDuration?: number;
   @IsOptional() @IsUUID() replyToMessageId?: string;
 }
 
