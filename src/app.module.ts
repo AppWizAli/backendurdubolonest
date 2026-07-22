@@ -29,6 +29,7 @@ import { MetricsModule } from './common/metrics/metrics.module';
 import { LegacyModule } from './legacy/legacy.module';
 import { AdminToolsModule } from './admin-tools/admin-tools.module';
 import { UploadsModule } from './uploads/uploads.module';
+import { SupportChatModule } from './support-chat/support-chat.module';
 
 @Module({
   imports: [
@@ -53,6 +54,7 @@ import { UploadsModule } from './uploads/uploads.module';
     LegacyModule,
     AdminToolsModule,
     UploadsModule,
+    SupportChatModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

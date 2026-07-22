@@ -97,6 +97,34 @@ enum DownloadAccess {
   NEVER
 }
 
+enum SupportConversationStatus {
+  OPEN
+  WAITING
+  RESOLVED
+  BLOCKED
+}
+
+enum SupportMessageSenderType {
+  USER
+  ADMIN
+  SYSTEM
+}
+
+enum SupportMessageType {
+  TEXT
+  IMAGE
+  VIDEO
+  VOICE
+  FILE
+  SYSTEM
+}
+
+enum SupportMessageStatus {
+  SENT
+  DELIVERED
+  SEEN
+}
+
 model User {
   id               String            @id @default(uuid()) @db.Uuid
   username         String            @db.VarChar(80)
@@ -137,6 +165,10 @@ model User {
   comments         ContentComment[]
   videoViews       VideoView[]
   favoriteDramas   FavoriteDrama[]
+  supportConversations SupportConversation[] @relation("SupportConversationUser")
+  assignedSupportConversations SupportConversation[] @relation("SupportConversationAdmin")
+  supportMessages SupportMessage[] @relation("SupportMessageSender")
+  supportReads SupportMessageRead[]
 
   @@index([status, deletedAt])
   @@index([username])
@@ -655,6 +687,98 @@ model UserMessage {
   @@index([userId, status, createdAt])
   @@index([groupId, createdAt])
   @@map("user_messages")
+}
+
+model SupportConversation {
+  id              String                    @id @default(uuid()) @db.Uuid
+  userId          String                    @unique @map("user_id") @db.Uuid
+  assignedAdminId String?                   @map("assigned_admin_id") @db.Uuid
+  status          SupportConversationStatus @default(OPEN)
+  lastMessageId   String?                   @map("last_message_id") @db.Uuid
+  lastMessageAt   DateTime?                 @map("last_message_at")
+  userUnreadCount Int                       @default(0) @map("user_unread_count")
+  adminUnreadCount Int                      @default(0) @map("admin_unread_count")
+  userLastSeenAt  DateTime?                 @map("user_last_seen_at")
+  adminLastSeenAt DateTime?                 @map("admin_last_seen_at")
+  createdAt       DateTime                  @default(now()) @map("created_at")
+  updatedAt       DateTime                  @updatedAt @map("updated_at")
+  deletedAt       DateTime?                 @map("deleted_at")
+  user            User                      @relation("SupportConversationUser", fields: [userId], references: [id], onDelete: Cascade)
+  assignedAdmin   User?                     @relation("SupportConversationAdmin", fields: [assignedAdminId], references: [id], onDelete: SetNull)
+  messages        SupportMessage[]
+  reads           SupportMessageRead[]
+  uploads         SupportUpload[]
+
+  @@index([status, lastMessageAt])
+  @@index([assignedAdminId, status])
+  @@index([deletedAt, lastMessageAt])
+  @@map("support_conversations")
+}
+
+model SupportMessage {
+  id              String                   @id @default(uuid()) @db.Uuid
+  conversationId  String                   @map("conversation_id") @db.Uuid
+  senderType      SupportMessageSenderType @map("sender_type")
+  senderId        String?                  @map("sender_id") @db.Uuid
+  messageType     SupportMessageType       @default(TEXT) @map("message_type")
+  text            String?                  @db.Text
+  mediaUrl        String?                  @map("media_url") @db.VarChar(2048)
+  thumbnail       String?                  @db.VarChar(2048)
+  voiceDuration   Int?                     @map("voice_duration")
+  fileSize        BigInt?                  @map("file_size")
+  mimeType        String?                  @map("mime_type") @db.VarChar(160)
+  replyToMessageId String?                 @map("reply_to_message_id") @db.Uuid
+  status          SupportMessageStatus     @default(SENT)
+  deliveredAt     DateTime?                @map("delivered_at")
+  seenAt          DateTime?                @map("seen_at")
+  deletedByUser   Boolean                  @default(false) @map("deleted_by_user")
+  deletedByAdmin  Boolean                  @default(false) @map("deleted_by_admin")
+  createdAt       DateTime                 @default(now()) @map("created_at")
+  updatedAt       DateTime                 @updatedAt @map("updated_at")
+  conversation    SupportConversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender          User?                    @relation("SupportMessageSender", fields: [senderId], references: [id], onDelete: SetNull)
+  replyToMessage  SupportMessage?          @relation("SupportMessageReplies", fields: [replyToMessageId], references: [id], onDelete: SetNull)
+  replies         SupportMessage[]         @relation("SupportMessageReplies")
+  reads           SupportMessageRead[]
+  uploads         SupportUpload[]
+
+  @@index([conversationId, createdAt])
+  @@index([senderId, createdAt])
+  @@index([status, createdAt])
+  @@map("support_messages")
+}
+
+model SupportMessageRead {
+  id             String              @id @default(uuid()) @db.Uuid
+  conversationId String              @map("conversation_id") @db.Uuid
+  messageId      String              @map("message_id") @db.Uuid
+  userId         String              @map("user_id") @db.Uuid
+  readAt         DateTime            @default(now()) @map("read_at")
+  conversation   SupportConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  message        SupportMessage      @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user           User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([conversationId, userId, readAt])
+  @@map("support_message_reads")
+}
+
+model SupportUpload {
+  id             String              @id @default(uuid()) @db.Uuid
+  conversationId String              @map("conversation_id") @db.Uuid
+  messageId      String?             @map("message_id") @db.Uuid
+  uploadId       String?             @map("upload_id") @db.Uuid
+  storageKey     String              @map("storage_key") @db.VarChar(1024)
+  originalName   String?             @map("original_name") @db.VarChar(255)
+  mimeType       String?             @map("mime_type") @db.VarChar(160)
+  fileSize       BigInt?             @map("file_size")
+  createdAt      DateTime            @default(now()) @map("created_at")
+  conversation   SupportConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  message        SupportMessage?     @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, createdAt])
+  @@index([messageId])
+  @@map("support_uploads")
 }
 
 model Banner {
