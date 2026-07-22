@@ -271,7 +271,7 @@ export class SupportChatService {
       senderId: message.senderId,
       messageType: message.messageType,
       text: message.text,
-      mediaUrl: message.mediaUrl,
+      mediaUrl: this.publicMediaUrl(message.mediaUrl),
       thumbnail: message.thumbnail,
       voiceDuration: message.voiceDuration,
       fileSize: message.fileSize ? message.fileSize.toString() : null,
@@ -286,5 +286,12 @@ export class SupportChatService {
       updatedAt: message.updatedAt,
       sender: message.sender,
     };
+  }
+
+  private publicMediaUrl(value?: string | null) {
+    if (!value) return null;
+    if (/^https?:\/\//i.test(value)) return value;
+    const base = this.config.get<string>('R2_PUBLIC_BASE_URL', '').replace(/\/+$/, '');
+    return base ? `${base}/${value.replace(/^\/+/, '')}` : value;
   }
 }
