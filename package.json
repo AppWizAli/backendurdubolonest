@@ -7,7 +7,7 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "build": "npx nest build",
+    "build": "npm run prisma:generate && npx nest build",
     "start": "node dist/src/main.js",
     "start:dev": "nest start --watch",
     "lint": "eslint \"src/**/*.ts\"",
